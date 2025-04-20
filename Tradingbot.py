@@ -85,7 +85,7 @@ def main():
             debug_mode=True,
             base_sl_percent=base_sl_percent,  # Base stop loss percentage
             base_tp_percent=base_tp_percent,  # Base take profit percentage
-            monitor_interval=5   # 5-second interval for position monitoring
+            monitor_interval=10   # 5-second interval for position monitoring
         )
         
         logger.info("ExecutionBot initialized successfully")
@@ -144,7 +144,7 @@ def main():
         
         # Start the trading loop with the execution bot
         print(f"\n=== Trading Session Started ===\n")
-        execution_bot.start_trading_loop(interval=30)  # 60-second trading cycle
+        execution_bot.start_trading_loop(interval=60)  # 60-second trading cycle
         
     except Exception as e:
         logger.error(f"Error in main function: {e}")
