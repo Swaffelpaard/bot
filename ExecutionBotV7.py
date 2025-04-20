@@ -30,7 +30,7 @@ logging.basicConfig(
     level=logging.INFO,
     format=LOG_FORMAT,
     handlers=[
-        logging.FileHandler("ComboBotV6_retest.log"),
+        logging.FileHandler("TradingBot.log"),
         logging.StreamHandler(),
     ],
 )
