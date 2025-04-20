@@ -13,8 +13,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Get credentials from environment variables
-wallet_address = os.environ.get("HYPERLIQUID_ADDRESS_LIVE_2")
-private_key = os.environ.get("HYPERLIQUID_KEY_LIVE_2")
+wallet_address = os.environ.get("wallet")
+private_key = os.environ.get("key")
 
 # Add a check to make sure the environment variables are loaded
 if not wallet_address or not private_key:
