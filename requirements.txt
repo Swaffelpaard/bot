@@ -1,0 +1,10 @@
+pandas>=1.5.0,<3.0.0
+numpy>=1.20.0
+pandas-ta>=0.3.14b0
+ccxt>=3.0.0
+python-dotenv>=1.0.0
+matplotlib>=3.5.0
+requests>=2.25.0
+scipy>=1.8.0
+scikit-learn>=1.0.0
+statsmodels>=0.13.0
