@@ -11,8 +11,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Get credentials from environment variables
-wallet_address = os.environ.get("HYPERLIQUID_ADDRESS_LIVE_2")
-private_key = os.environ.get("HYPERLIQUID_KEY_LIVE_2")
+wallet_address = os.environ.get("wallet")
+private_key = os.environ.get("key")
 
 # Add a check to make sure the environment variables are loaded
 if not wallet_address or not private_key:
@@ -28,7 +28,7 @@ logging.basicConfig(
     level=logging.INFO,
     format=LOG_FORMAT,
     handlers=[
-        logging.FileHandler("ComboBotV6_retest.log"),
+        logging.FileHandler("TradingBot.log"),
         logging.StreamHandler(),
     ],
 )
@@ -68,7 +68,7 @@ class ExecutionBot:
              xtl_threshold=37, risk_per_trade=0.23, max_open_trades=1,
              stop_loss_atr_multiple=1.0, take_profit_atr_multiple=2.0,
              stop_loss_percent=1.0, take_profit_percent=2.0, use_trailing_stop=True, base_sl_percent=1.0, base_tp_percent=1.0, 
-             use_atr_for_stops=True, use_signal_sl_tp=True, leverage=10, margin_mode="isolated", wallet_address=None, private_key=None,
+             use_atr_for_stops=False, use_signal_sl_tp=True, leverage=5, margin_mode="isolated", wallet_address=None, private_key=None,
              debug_mode=True, min_holding_time_minutes=30, monitor_interval=5):
         
         """
