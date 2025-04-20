@@ -61,8 +61,6 @@ def log_error(error, context):
     logger.error(f"Error in {context} ({error_type}): {error}")
     return error_type
 
-
-
 class HyperliquidWebSocket:
     def __init__(self, wallet_address):
         self.wallet_address = wallet_address
@@ -181,6 +179,8 @@ class HyperliquidWebSocket:
         """Get latest order data from WebSocket"""
         return self.order_data
 
+
+
 class ExecutionBot:
 
     ##################################################################################################################################################
@@ -217,6 +217,9 @@ class ExecutionBot:
         min_holding_time_minutes : int
             Minimum time to hold a position before allowing exit signals
         """
+        self.wallet_address = wallet_address
+        self.private_key = private_key       
+                 
         self.monitor_interval = monitor_interval
         self.monitor_thread = None
         self.monitor_active = False
