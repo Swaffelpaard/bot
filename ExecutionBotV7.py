@@ -2,6 +2,8 @@ import ccxt
 import logging
 from datetime import datetime, timedelta
 import time
+import random
+from functools import wraps
 import warnings
 import threading
 import os
@@ -11,8 +13,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Get credentials from environment variables
-wallet_address = os.environ.get("wallet")
-private_key = os.environ.get("key")
+wallet_address = os.environ.get("HYPERLIQUID_ADDRESS_LIVE_2")
+private_key = os.environ.get("HYPERLIQUID_KEY_LIVE_2")
 
 # Add a check to make sure the environment variables are loaded
 if not wallet_address or not private_key:
@@ -28,7 +30,7 @@ logging.basicConfig(
     level=logging.INFO,
     format=LOG_FORMAT,
     handlers=[
-        logging.FileHandler("TradingBot.log"),
+        logging.FileHandler("ComboBotV6_retest.log"),
         logging.StreamHandler(),
     ],
 )
@@ -68,8 +70,8 @@ class ExecutionBot:
              xtl_threshold=37, risk_per_trade=0.23, max_open_trades=1,
              stop_loss_atr_multiple=1.0, take_profit_atr_multiple=2.0,
              stop_loss_percent=1.0, take_profit_percent=2.0, use_trailing_stop=True, base_sl_percent=1.0, base_tp_percent=1.0, 
-             use_atr_for_stops=False, use_signal_sl_tp=True, leverage=5, margin_mode="isolated", wallet_address=None, private_key=None,
-             debug_mode=True, min_holding_time_minutes=30, monitor_interval=5):
+             use_atr_for_stops=True, use_signal_sl_tp=True, leverage=10, margin_mode="isolated", wallet_address=None, private_key=None,
+             debug_mode=True, min_holding_time_minutes=30, monitor_interval=15):
         
         """
         Initialize the EWO strategy for Hyperliquid Exchange with debug options.
@@ -152,6 +154,19 @@ class ExecutionBot:
         self.trailing_stop_data = None
         self.exchange_orders = {'stop_loss_id': None, 'take_profit_id': None}
         
+        # Rate limiting controls
+        self.last_api_call_time = {}  # Track last call time per endpoint
+        self.current_backoff = 1.0  # Current backoff multiplier
+        self.rate_limited = False   # Flag for when we're being rate limited
+        self.position_cache = None  # Store position data
+        self.position_cache_time = 0  # When position was last retrieved
+        self.price_cache = None     # Store price data
+        self.price_cache_time = 0   # When price was last retrieved
+        
+        # Monitoring controls
+        self.full_check_interval = 20  # Time between full checks (seconds)
+        self.last_full_check_time = 0  # When we last did a full check
+
         # Initial configuration
         self._initialize_exchange()
     
@@ -224,6 +239,75 @@ class ExecutionBot:
                 # Unexpected error
                 logger.error(f"Error setting leverage: {e}")
                 return False
+
+    def _throttled_api_call(self, endpoint_name, call_function, *args, **kwargs):
+        """
+        Execute API calls with rate limiting controls
+        
+        Parameters:
+        -----------
+        endpoint_name : str
+            Name to track this endpoint for rate limiting
+        call_function : callable
+            The actual API call function to execute
+        *args, **kwargs : 
+            Arguments to pass to the call function
+        
+        Returns:
+        --------
+        API call result or None if failed
+        """
+        current_time = time.time()
+        min_interval = 1.0  # Minimum seconds between calls to same endpoint
+        
+        # Check if we need to wait
+        if endpoint_name in self.last_api_call_time:
+            time_since_last = current_time - self.last_api_call_time[endpoint_name]
+            if time_since_last < min_interval * self.current_backoff:
+                # Add jitter to prevent synchronized calls
+                sleep_time = (min_interval * self.current_backoff - time_since_last) + random.uniform(0, 0.5)
+                logger.debug(f"Throttling {endpoint_name} API call, waiting {sleep_time:.2f}s")
+                time.sleep(sleep_time)
+        
+        # Update last call time
+        self.last_api_call_time[endpoint_name] = time.time()
+        
+        # Execute the call with retry logic
+        max_retries = 2
+        for attempt in range(max_retries + 1):
+            try:
+                result = call_function(*args, **kwargs)
+                
+                # Success - gradually reduce backoff
+                if self.current_backoff > 1.0:
+                    self.current_backoff = max(1.0, self.current_backoff / 1.2)
+                    self.rate_limited = False
+                    
+                return result
+            
+            except Exception as e:
+                error_msg = str(e).lower()
+                
+                # Check if it's a rate limit error
+                if "429" in error_msg or "rate limit" in error_msg or "too many requests" in error_msg:
+                    self.rate_limited = True
+                    
+                    # Increase backoff factor
+                    self.current_backoff *= 1.5
+                    
+                    if attempt < max_retries:
+                        backoff_time = min_interval * self.current_backoff
+                        logger.warning(f"Rate limited on {endpoint_name}. Backing off for {backoff_time:.2f}s. Retry {attempt+1}/{max_retries}")
+                        time.sleep(backoff_time)
+                    else:
+                        logger.error(f"Max retries exceeded for {endpoint_name}")
+                        return None
+                else:
+                    # Not a rate limit error - just log and return None
+                    logger.error(f"Error in {endpoint_name}: {e}")
+                    return None
+                    
+        return None  # Should never reach here but just in case
 
     ##################################################################################################################################################
     ################################################################ Order Execution #################################################################
@@ -1482,51 +1566,286 @@ class ExecutionBot:
             logger.info("Stopping position monitor")
             # Thread will terminate in next iteration due to monitor_active flag
     
+
     def _position_monitor_loop(self):
-        """The high-frequency monitoring loop that runs in a separate thread"""
-        last_delay_log_time = 0  # Track when we last logged a delay message
+        """The high-frequency monitoring loop with rate limiting awareness"""
+        last_delay_log_time = 0
+        last_full_check_time = 0
         
         while self.monitor_active:
             try:
+                current_time = time.time()
+                
                 # CRITICAL: Skip if position is in process of being opened
                 if hasattr(self, 'position_opening_in_progress') and self.position_opening_in_progress:
                     time.sleep(self.monitor_interval)
                     continue
-
-                # Check for active positions
-                positions = self.get_open_positions(verbose=False)
+                
+                # Determine if we need a full check or lightweight check
+                time_since_full_check = current_time - last_full_check_time
+                do_full_check = (time_since_full_check >= self.full_check_interval) or (self.position_cache is None)
+                
+                # Check for active positions using cache when possible
+                if do_full_check:
+                    # Full check - get fresh position data
+                    positions = self._throttled_api_call(
+                        "get_positions", 
+                        self.exchange.fetch_positions,
+                        [self.symbol]
+                    )
+                    
+                    if positions is not None:
+                        # Update cache
+                        self.position_cache = positions
+                        self.position_cache_time = current_time
+                        last_full_check_time = current_time
+                    elif self.position_cache is not None:
+                        # Use cached positions if API call failed
+                        positions = self.position_cache
+                        logger.info("Using cached position data due to API error")
+                    else:
+                        # No cache and API failed
+                        logger.warning("Failed to get position data and no cache available")
+                        time.sleep(self.monitor_interval * 1)  # Wait longer before retry
+                        continue
+                else:
+                    # Lightweight check - use cached positions
+                    positions = self.position_cache
+                    
+                # Process positions regardless of source
                 active_position_exists = positions and any(float(pos.get('contracts', 0) or 0) != 0 for pos in positions)
                 
-                if active_position_exists:
-                    # Check for recent position opening and apply delay
-                    if hasattr(self, 'position_opened_time') and self.position_opened_time:
-                        time_since_opened = (datetime.now() - self.position_opened_time).total_seconds()
-                        current_time = time.time()
-                        
-                        # Skip monitoring for 60 seconds after position opening
-                        if time_since_opened < 20:
-                            # Only log once every 30 seconds to reduce spam
-                            if current_time - last_delay_log_time > 30:
-                                logger.info(f"High-freq monitor: Delaying monitoring until position is 20s old (currently {time_since_opened:.0f}s)")
-                                last_delay_log_time = current_time
-                            
-                            time.sleep(self.monitor_interval)
-                            continue
-                        
-                        # Log once when we exit the delay period
-                        if time_since_opened >= 260 and time_since_opened < 20 + self.monitor_interval:
-                            logger.info(f"High-freq monitor: Delay period ended, resuming normal monitoring")
-                    
-                    # Perform normal monitoring after delay period
-                    intervention_needed = self.monitor_exit_orders()
-                    if intervention_needed:
-                        logger.info("High-frequency monitor detected need for intervention - market exit executed")
+                if not active_position_exists:
+                    # No active positions, reset order tracking
+                    logger.info("No active positions found in monitor, resetting tracking")
+                    self.exchange_orders = {'stop_loss_id': None, 'take_profit_id': None}
+                    self.trailing_stop_data = None
+                    self.position_verified = False
+                    self.monitor_active = False  # Exit the monitoring loop
+                    return
                 
-                time.sleep(self.monitor_interval)
+                # Check for recent position opening and apply delay
+                if hasattr(self, 'position_opened_time') and self.position_opened_time:
+                    time_since_opened = (datetime.now() - self.position_opened_time).total_seconds()
+                    
+                    # Skip monitoring for 20 seconds after position opening
+                    if time_since_opened < 20:
+                        # Only log once every 30 seconds
+                        if current_time - last_delay_log_time > 30:
+                            logger.info(f"Monitor: Delaying until position is 20s old (currently {time_since_opened:.0f}s)")
+                            last_delay_log_time = current_time
+                        
+                        time.sleep(self.monitor_interval)
+                        continue
+                
+                # Get current price with rate limiting
+                current_price = None
+                get_fresh_price = do_full_check or (self.price_cache is None) or (current_time - self.price_cache_time > 10)
+                
+                if get_fresh_price:
+                    ticker = self._throttled_api_call(
+                        "fetch_ticker",
+                        self.exchange.fetch_ticker,
+                        self.symbol
+                    )
+                    
+                    if ticker:
+                        current_price = ticker['last']
+                        self.price_cache = current_price
+                        self.price_cache_time = current_time
+                    elif self.price_cache is not None:
+                        current_price = self.price_cache
+                        logger.info("Using cached price due to API error")
+                else:
+                    current_price = self.price_cache
+                
+                # If we're doing a full check, verify orders only once per interval
+                if do_full_check and current_price is not None:
+                    # Get position details for verification
+                    position = positions[0]
+                    position_side = position.get('side', '')
+                    
+                    # Check for stop loss and take profit orders - only on full checks
+                    if not self.position_verified or time_since_full_check >= self.full_check_interval * 3:
+                        # We need to verify orders, but be careful with API calls
+                        open_orders = self._throttled_api_call(
+                            "fetch_open_orders",
+                            self.exchange.fetch_open_orders,
+                            self.symbol
+                        )
+                        
+                        # Process orders only if we got valid data
+                        if open_orders is not None:
+                            self._verify_orders_from_data(position, open_orders, current_price)
+                        
+                    # Update trailing stop with current price if active
+                    if self.trailing_stop_data is not None and current_price is not None:
+                        # Only update trailing stop every 60 seconds or when triggered
+                        if (self.trailing_stop_data.get('last_updated') is None or
+                            (datetime.now() - self.trailing_stop_data.get('last_updated')).total_seconds() >= 60):
+                            
+                            self.trailing_stop_data, update_info = self.update_tiered_trailing_stop(
+                                self.trailing_stop_data, current_price
+                            )
+                            
+                            # Log if stop was moved
+                            if update_info.get('action') in ['adjusted', 'initial_move'] and update_info.get('exchange_update', False):
+                                new_stop = update_info.get('new_stop')
+                                logger.info(f"Trailing stop updated to: {new_stop}")
+                    
+                    # Check for stop loss or trailing stop hit
+                    if self.trailing_stop_data is not None and current_price is not None:
+                        if self.check_trailing_stop_hit(self.trailing_stop_data, current_price):
+                            logger.warning(f"Trailing stop hit at {current_price}! Executing market exit")
+                            self.market_exit()
+                            self.monitor_active = False
+                            break
+                
+                # Calculate adaptive interval based on rate limit status
+                adaptive_interval = self.monitor_interval
+                if self.rate_limited:
+                    # Increase monitoring interval when hitting rate limits
+                    adaptive_interval = self.monitor_interval * 2
+                    logger.info(f"Rate limited, using longer monitoring interval: {adaptive_interval}s")
+                
+                # Add jitter to prevent synchronized API calls
+                jitter = random.uniform(0, 1)
+                time.sleep(adaptive_interval + jitter)
+                
             except Exception as e:
                 log_error(e, "position monitor loop")
-                time.sleep(max(self.monitor_interval, 5))  # Ensure we don't spam on errors
-    
+                time.sleep(max(self.monitor_interval * 2, 10))  # Wait longer on errors
+
+    # Add this new helper method
+    def _verify_orders_from_data(self, position, open_orders, current_price):
+        """Verify and track orders without making additional API calls"""
+        try:
+            position_side = position.get('side', '')
+            position_size = float(position.get('contracts', 0) or 0)
+            entry_price = float(position.get('entryPrice', 0) or 0)
+            
+            # Determine close side (opposite of position)
+            close_side = 'sell' if position_side == 'long' else 'buy'
+            
+            # Initialize tracking if needed
+            if not hasattr(self, 'exchange_orders'):
+                self.exchange_orders = {'stop_loss_id': None, 'take_profit_id': None}
+            
+            # Track found orders
+            found_stop_loss = False
+            found_take_profit = False
+            
+            # Check our tracked orders first
+            for order in open_orders:
+                if order.get('id') == self.exchange_orders.get('stop_loss_id'):
+                    found_stop_loss = True
+                elif order.get('id') == self.exchange_orders.get('take_profit_id'):
+                    found_take_profit = True
+            
+            # If we didn't find our tracked orders, look for matching ones
+            if not found_stop_loss or not found_take_profit:
+                for order in open_orders:
+                    order_side = order.get('side', '')
+                    if order_side != close_side:
+                        continue
+                    
+                    is_reduce_only = order.get('reduceOnly', False)
+                    if not is_reduce_only:
+                        continue
+                    
+                    order_type = order.get('type', '').lower()
+                    order_price = float(order.get('price', 0) or 0)
+                    
+                    # Identify stop loss orders
+                    if not found_stop_loss and ('stop' in order_type or order.get('stopPrice')):
+                        found_stop_loss = True
+                        self.exchange_orders['stop_loss_id'] = order.get('id')
+                        logger.info(f"Found stop loss order: {order.get('id')}")
+                    
+                    # Identify take profit orders (limit orders above entry for longs, below for shorts)
+                    elif not found_take_profit and order_type == 'limit':
+                        if (position_side == 'long' and order_price > entry_price) or \
+                        (position_side == 'short' and order_price < entry_price):
+                            found_take_profit = True
+                            self.exchange_orders['take_profit_id'] = order.get('id')
+                            logger.info(f"Found take profit order: {order.get('id')}")
+            
+            # Create missing orders if needed, but be careful with API calls
+            # Only do this during full verification checks
+            if (not found_stop_loss or not found_take_profit) and not self.rate_limited:
+                # Calculate stop loss and take profit levels
+                if hasattr(self, 'trailing_stop_data') and self.trailing_stop_data is not None:
+                    stop_loss = self.trailing_stop_data.get('current_stop_price')
+                    take_profit = self.trailing_stop_data.get('take_profit_price')
+                else:
+                    # Calculate based on ATR or fixed percentage
+                    if hasattr(self, 'data') and self.data is not None and 'atr' in self.data.columns:
+                        atr = self.data['atr'].iloc[-1]
+                    else:
+                        atr = entry_price * 0.0075  # Fallback
+                    
+                    if position_side == 'long':
+                        stop_loss = entry_price - (atr * self.stop_loss_atr_multiple)
+                        take_profit = entry_price + (atr * self.take_profit_atr_multiple)
+                    else:
+                        stop_loss = entry_price + (atr * self.stop_loss_atr_multiple)
+                        take_profit = entry_price - (atr * self.take_profit_atr_multiple)
+                
+                # Create missing stop loss order
+                if not found_stop_loss:
+                    logger.warning(f"Stop loss order not found - creating new one at {stop_loss}")
+                    try:
+                        stop_order = self._throttled_api_call(
+                            "create_order_sl",
+                            self.exchange.create_order,
+                            symbol=self.symbol,
+                            type='stop',
+                            side=close_side,
+                            amount=position_size,
+                            price=stop_loss,
+                            params={
+                                "stopPrice": stop_loss,
+                                "reduceOnly": True
+                            }
+                        )
+                        
+                        if stop_order:
+                            self.exchange_orders['stop_loss_id'] = stop_order['id']
+                            logger.info(f"Created new stop loss order: {stop_order['id']} at {stop_loss}")
+                    except Exception as e:
+                        logger.error(f"Failed to create stop loss: {e}")
+                
+                # Create missing take profit order
+                if not found_take_profit:
+                    logger.warning(f"Take profit order not found - creating new one at {take_profit}")
+                    try:
+                        tp_order = self._throttled_api_call(
+                            "create_order_tp",
+                            self.exchange.create_order,
+                            symbol=self.symbol,
+                            type='limit',
+                            side=close_side,
+                            amount=position_size,
+                            price=take_profit,
+                            params={"reduceOnly": True}
+                        )
+                        
+                        if tp_order:
+                            self.exchange_orders['take_profit_id'] = tp_order['id']
+                            logger.info(f"Created new take profit order: {tp_order['id']} at {take_profit}")
+                    except Exception as e:
+                        logger.error(f"Failed to create take profit: {e}")
+            
+            # Mark position as verified
+            self.position_verified = True
+            
+            return found_stop_loss and found_take_profit
+        
+        except Exception as e:
+            logger.error(f"Error verifying orders from data: {e}")
+            return False
+
+
     ###### UPDATED TESTING #######
     
     def monitor_exit_orders(self):
@@ -1574,13 +1893,13 @@ class ExecutionBot:
                         # For long positions, emergency stop would be far below entry
                         if position_side == 'long':
                             # Use a very wide emergency stop
-                            emergency_stop = entry_price * 0.98  # 2% below entry
+                            emergency_stop = entry_price * 0.99  # 2% below entry
                             if current_price <= emergency_stop:
                                 logger.warning(f"EMERGENCY EXIT: Price far below entry during delay period")
                                 return True  # Trigger intervention
                         else:  # short
                             # For shorts, emergency stop would be far above entry
-                            emergency_stop = entry_price * 1.02  # 2% above entry
+                            emergency_stop = entry_price * 1.01  # 2% above entry
                             if current_price >= emergency_stop:
                                 logger.warning(f"EMERGENCY EXIT: Price far above entry during delay period")
                                 return True  # Trigger intervention
@@ -1779,7 +2098,7 @@ class ExecutionBot:
                         atr_value = self.data['atr'].iloc[-1]
                     else:
                         # If no data or ATR available, use a percentage of entry price
-                        atr_value = entry_price * 0.015  # Approximate 1.5% ATR
+                        atr_value = entry_price * 0.0075  # Approximate 0.75% ATR
                     
                     logger.info(f"ATR value: {atr_value}, SL multiple: {self.stop_loss_atr_multiple}, TP multiple: {self.take_profit_atr_multiple}")
                     
@@ -2617,3 +2936,4 @@ class ExecutionBot:
         except Exception as e:
             log_error(e, "trading loop")
     
+
