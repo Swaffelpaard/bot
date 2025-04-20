@@ -302,7 +302,7 @@ class SignalBot:
             "moderate_volatility": {
                 "l2_weight": 0.7,
                 "l3_weight": 0.5,
-                "min_signal_score": 50.0,
+                "min_signal_score": 40.0,
                 "cluster_proximity_max": 1.5,
                 "sl_factor": 0.65,
                 "tp_factor": 0.5,
@@ -332,7 +332,7 @@ class SignalBot:
             "strong_uptrend": {
                 "l2_weight": 0.5,
                 "l3_weight": 0.4,
-                "min_signal_score": 60.0,  # Lower threshold to enter more easily during uptrend
+                "min_signal_score": 40.0,  # Lower threshold to enter more easily during uptrend
                 "cluster_proximity_max": 2.0,
                 "sl_factor": 0.75,  # Wider stops in trending market
                 "tp_factor": 0.5,  # Larger targets in trending market
@@ -345,7 +345,7 @@ class SignalBot:
             "strong_downtrend": {
                 "l2_weight": 0.5,
                 "l3_weight": 0.4,
-                "min_signal_score": 45.0,  # Lower threshold to enter more easily during downtrend
+                "min_signal_score": 40.0,  # Lower threshold to enter more easily during downtrend
                 "cluster_proximity_max": 2.0,
                 "sl_factor": 0.75,  # Wider stops in trending market
                 "tp_factor": 0.5,  # Larger targets in trending market
