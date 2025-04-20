@@ -8,6 +8,8 @@ import warnings
 import threading
 import os
 from dotenv import load_dotenv
+import websocket
+import json
 
 # Load environment variables from .env file
 load_dotenv()
@@ -58,6 +60,126 @@ def log_error(error, context):
     
     logger.error(f"Error in {context} ({error_type}): {error}")
     return error_type
+
+
+
+class HyperliquidWebSocket:
+    def __init__(self, wallet_address):
+        self.wallet_address = wallet_address
+        self.ws = None
+        self.position_data = None
+        self.order_data = None
+        self.last_update_time = 0
+        self.connected = False
+        
+    def connect(self):
+        """Connect to Hyperliquid WebSocket"""
+        # Hyperliquid's WebSocket URL
+        websocket_url = "wss://api.hyperliquid.xyz/ws"
+        
+        self.ws = websocket.WebSocketApp(
+            websocket_url,
+            on_open=self.on_open,
+            on_message=self.on_message,
+            on_error=self.on_error,
+            on_close=self.on_close
+        )
+        
+        # Run websocket in a separate thread
+        ws_thread = threading.Thread(target=self.ws.run_forever)
+        ws_thread.daemon = True
+        ws_thread.start()
+        
+        # Wait for connection
+        timeout = 10
+        start_time = time.time()
+        while not self.connected and time.time() - start_time < timeout:
+            time.sleep(0.1)
+            
+        if not self.connected:
+            raise Exception("Failed to connect to WebSocket")
+        
+        logger.info("WebSocket connected successfully")
+        
+    def on_open(self, ws):
+        """Handle WebSocket connection open"""
+        self.connected = True
+        
+        # Subscribe to user data streams
+        subscription_messages = [
+            {
+                "method": "subscribe",
+                "subscription": {
+                    "type": "userEvents",
+                    "user": self.wallet_address
+                }
+            },
+            {
+                "method": "subscribe",
+                "subscription": {
+                    "type": "userFills",
+                    "user": self.wallet_address
+                }
+            },
+            {
+                "method": "subscribe",
+                "subscription": {
+                    "type": "userFundings",
+                    "user": self.wallet_address
+                }
+            },
+            {
+                "method": "subscribe",
+                "subscription": {
+                    "type": "userNonFundingLedgerUpdates",
+                    "user": self.wallet_address
+                }
+            }
+        ]
+        
+        for msg in subscription_messages:
+            self.ws.send(json.dumps(msg))
+        
+        logger.info("Subscribed to user data streams")
+        
+    def on_message(self, ws, message):
+        """Handle incoming WebSocket messages"""
+        try:
+            data = json.loads(message)
+            
+            if data.get("channel") == "userEvents":
+                # Update position data from real-time events
+                if "data" in data and "positions" in data["data"]:
+                    self.position_data = data["data"]["positions"]
+                    self.last_update_time = time.time()
+                    
+                if "data" in data and "orders" in data["data"]:
+                    self.order_data = data["data"]["orders"]
+                    self.last_update_time = time.time()
+                    
+            elif data.get("channel") == "userFills":
+                # Handle fill events
+                logger.info(f"Fill event received: {data}")
+                
+        except Exception as e:
+            logger.error(f"Error processing WebSocket message: {e}")
+        
+    def on_error(self, ws, error):
+        """Handle WebSocket errors"""
+        logger.error(f"WebSocket error: {error}")
+        
+    def on_close(self, ws, close_status_code, close_msg):
+        """Handle WebSocket connection close"""
+        self.connected = False
+        logger.info(f"WebSocket closed: {close_status_code} - {close_msg}")
+        
+    def get_position_data(self):
+        """Get latest position data from WebSocket"""
+        return self.position_data
+    
+    def get_order_data(self):
+        """Get latest order data from WebSocket"""
+        return self.order_data
 
 class ExecutionBot:
 
@@ -145,7 +267,11 @@ class ExecutionBot:
                 "defaultMarketSlippagePercentage": 5.0  # 5% default slippage
             }
         })
-        
+
+        # Initialize WebSocket connection
+        self.ws_client = HyperliquidWebSocket(self.wallet_address)
+        self.ws_client.connect()
+                 
         # Initialize data storage
         self.data = None
         self.positions = []
@@ -1567,154 +1693,70 @@ class ExecutionBot:
             # Thread will terminate in next iteration due to monitor_active flag
     
 
-    def _position_monitor_loop(self):
-        """The high-frequency monitoring loop with rate limiting awareness"""
-        last_delay_log_time = 0
-        last_full_check_time = 0
-        
-        while self.monitor_active:
-            try:
-                current_time = time.time()
-                
-                # CRITICAL: Skip if position is in process of being opened
-                if hasattr(self, 'position_opening_in_progress') and self.position_opening_in_progress:
-                    time.sleep(self.monitor_interval)
-                    continue
-                
-                # Determine if we need a full check or lightweight check
-                time_since_full_check = current_time - last_full_check_time
-                do_full_check = (time_since_full_check >= self.full_check_interval) or (self.position_cache is None)
-                
-                # Check for active positions using cache when possible
-                if do_full_check:
-                    # Full check - get fresh position data
-                    positions = self._throttled_api_call(
-                        "get_positions", 
-                        self.exchange.fetch_positions,
-                        [self.symbol]
-                    )
-                    
-                    if positions is not None:
-                        # Update cache
-                        self.position_cache = positions
-                        self.position_cache_time = current_time
-                        last_full_check_time = current_time
-                    elif self.position_cache is not None:
-                        # Use cached positions if API call failed
-                        positions = self.position_cache
-                        logger.info("Using cached position data due to API error")
-                    else:
-                        # No cache and API failed
-                        logger.warning("Failed to get position data and no cache available")
-                        time.sleep(self.monitor_interval * 1)  # Wait longer before retry
-                        continue
-                else:
-                    # Lightweight check - use cached positions
-                    positions = self.position_cache
-                    
-                # Process positions regardless of source
-                active_position_exists = positions and any(float(pos.get('contracts', 0) or 0) != 0 for pos in positions)
-                
-                if not active_position_exists:
-                    # No active positions, reset order tracking
-                    logger.info("No active positions found in monitor, resetting tracking")
-                    self.exchange_orders = {'stop_loss_id': None, 'take_profit_id': None}
-                    self.trailing_stop_data = None
-                    self.position_verified = False
-                    self.monitor_active = False  # Exit the monitoring loop
-                    return
-                
-                # Check for recent position opening and apply delay
-                if hasattr(self, 'position_opened_time') and self.position_opened_time:
-                    time_since_opened = (datetime.now() - self.position_opened_time).total_seconds()
-                    
-                    # Skip monitoring for 20 seconds after position opening
-                    if time_since_opened < 20:
-                        # Only log once every 30 seconds
-                        if current_time - last_delay_log_time > 30:
-                            logger.info(f"Monitor: Delaying until position is 20s old (currently {time_since_opened:.0f}s)")
-                            last_delay_log_time = current_time
-                        
+        def _position_monitor_loop(self):
+            """Modified monitoring loop using WebSocket data"""
+            while self.monitor_active:
+                try:
+                    # Skip if position is being opened
+                    if hasattr(self, 'position_opening_in_progress') and self.position_opening_in_progress:
                         time.sleep(self.monitor_interval)
                         continue
-                
-                # Get current price with rate limiting
-                current_price = None
-                get_fresh_price = do_full_check or (self.price_cache is None) or (current_time - self.price_cache_time > 10)
-                
-                if get_fresh_price:
-                    ticker = self._throttled_api_call(
-                        "fetch_ticker",
-                        self.exchange.fetch_ticker,
-                        self.symbol
-                    )
                     
-                    if ticker:
-                        current_price = ticker['last']
-                        self.price_cache = current_price
-                        self.price_cache_time = current_time
-                    elif self.price_cache is not None:
-                        current_price = self.price_cache
-                        logger.info("Using cached price due to API error")
-                else:
-                    current_price = self.price_cache
-                
-                # If we're doing a full check, verify orders only once per interval
-                if do_full_check and current_price is not None:
-                    # Get position details for verification
-                    position = positions[0]
-                    position_side = position.get('side', '')
+                    # Get position data from WebSocket instead of API
+                    ws_positions = self.ws_client.get_position_data()
                     
-                    # Check for stop loss and take profit orders - only on full checks
-                    if not self.position_verified or time_since_full_check >= self.full_check_interval * 3:
-                        # We need to verify orders, but be careful with API calls
-                        open_orders = self._throttled_api_call(
-                            "fetch_open_orders",
-                            self.exchange.fetch_open_orders,
-                            self.symbol
+                    if ws_positions is not None:
+                        # Process WebSocket position data
+                        active_position_exists = self._process_ws_positions(ws_positions)
+                    else:
+                        # Fallback to API if WebSocket data is not available
+                        positions = self._throttled_api_call(
+                            "get_positions", 
+                            self.exchange.fetch_positions,
+                            [self.symbol]
                         )
                         
-                        # Process orders only if we got valid data
-                        if open_orders is not None:
-                            self._verify_orders_from_data(position, open_orders, current_price)
-                        
-                    # Update trailing stop with current price if active
-                    if self.trailing_stop_data is not None and current_price is not None:
-                        # Only update trailing stop every 60 seconds or when triggered
-                        if (self.trailing_stop_data.get('last_updated') is None or
-                            (datetime.now() - self.trailing_stop_data.get('last_updated')).total_seconds() >= 60):
-                            
-                            self.trailing_stop_data, update_info = self.update_tiered_trailing_stop(
-                                self.trailing_stop_data, current_price
-                            )
-                            
-                            # Log if stop was moved
-                            if update_info.get('action') in ['adjusted', 'initial_move'] and update_info.get('exchange_update', False):
-                                new_stop = update_info.get('new_stop')
-                                logger.info(f"Trailing stop updated to: {new_stop}")
+                        if positions is not None:
+                            active_position_exists = positions and any(float(pos.get('contracts', 0) or 0) != 0 for pos in positions)
+                        else:
+                            # If API also fails, wait and retry
+                            time.sleep(self.monitor_interval * 2)
+                            continue
                     
-                    # Check for stop loss or trailing stop hit
-                    if self.trailing_stop_data is not None and current_price is not None:
-                        if self.check_trailing_stop_hit(self.trailing_stop_data, current_price):
-                            logger.warning(f"Trailing stop hit at {current_price}! Executing market exit")
+                    if not active_position_exists:
+                        logger.info("No active positions, exiting monitor")
+                        break
+                    
+                    # Get order data from WebSocket
+                    ws_orders = self.ws_client.get_order_data()
+                    
+                    if ws_orders is not None:
+                        # Process WebSocket order data
+                        self._process_ws_orders(ws_orders)
+                    else:
+                        # Only fetch via API occasionally as backup
+                        if (time.time() - self.last_order_api_check) > 120:  # Every 2 minutes
+                            orders = self._throttled_api_call(
+                                "fetch_open_orders",
+                                self.exchange.fetch_open_orders,
+                                self.symbol
+                            )
+                            if orders is not None:
+                                self._verify_orders_from_data(self.position_cache[0], orders, self.price_cache)
+                                self.last_order_api_check = time.time()
+                    
+                    # Check for stop hits with cached data
+                    if self.price_cache and self.trailing_stop_data:
+                        if self.check_trailing_stop_hit(self.trailing_stop_data, self.price_cache):
+                            logger.warning(f"Stop hit at {self.price_cache}! Executing market exit")
                             self.market_exit()
-                            self.monitor_active = False
                             break
-                
-                # Calculate adaptive interval based on rate limit status
-                adaptive_interval = self.monitor_interval
-                if self.rate_limited:
-                    # Increase monitoring interval when hitting rate limits
-                    adaptive_interval = self.monitor_interval * 2
-                    logger.info(f"Rate limited, using longer monitoring interval: {adaptive_interval}s")
-                
-                # Add jitter to prevent synchronized API calls
-                jitter = random.uniform(0, 1)
-                time.sleep(adaptive_interval + jitter)
-                
-            except Exception as e:
-                log_error(e, "position monitor loop")
-                time.sleep(max(self.monitor_interval * 2, 10))  # Wait longer on errors
+                    
+                    time.sleep(self.monitor_interval)
+                    
+                except Exception as e:
+                    log_error(e, "position monitor loop")
+                    time.sleep(self.monitor_interval * 2)
 
     # Add this new helper method
     def _verify_orders_from_data(self, position, open_orders, current_price):
