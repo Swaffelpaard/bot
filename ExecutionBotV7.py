@@ -1847,7 +1847,54 @@ class ExecutionBot:
 
 
     ###### UPDATED TESTING #######
-    
+
+    def calculate_emergency_levels(self, position):
+        """
+        Calculate emergency stop loss and take profit levels using fixed percentages
+        
+        Parameters:
+        -----------
+        position : dict
+            Position details from the exchange
+        
+        Returns:
+        --------
+        tuple: (stop_loss_price, take_profit_price)
+        """
+        try:
+            # Extract position details
+            position_side = position.get('side', '')
+            entry_price = float(position.get('entryPrice', 0) or 0)
+            
+            if entry_price == 0:
+                logger.error("Invalid entry price in position data")
+                return None, None
+            
+            # Fixed percentages
+            emergency_sl_percent = 0.75  # 0.75% stop loss
+            emergency_tp_percent = 0.5   # 0.5% take profit
+            
+            if position_side == 'long':
+                # For long positions: stop loss below entry, take profit above
+                stop_loss = entry_price * (1 - emergency_sl_percent / 100)
+                take_profit = entry_price * (1 + emergency_tp_percent / 100)
+            elif position_side == 'short':
+                # For short positions: stop loss above entry, take profit below
+                stop_loss = entry_price * (1 + emergency_sl_percent / 100)
+                take_profit = entry_price * (1 - emergency_tp_percent / 100)
+            else:
+                logger.error(f"Invalid position side: {position_side}")
+                return None, None
+            
+            logger.info(f"Calculated emergency levels: SL={stop_loss:.4f}, TP={take_profit:.4f} " + 
+                    f"(SL={emergency_sl_percent}%, TP={emergency_tp_percent}%)")
+            
+            return stop_loss, take_profit
+        
+        except Exception as e:
+            logger.error(f"Error calculating emergency levels: {e}")
+            return None, None
+
     def monitor_exit_orders(self):
         """
         Continuously monitor the status of exit orders with improved delay handling
@@ -2091,37 +2138,46 @@ class ExecutionBot:
                     pass
             
             # Step 4: If we STILL don't have stop and take profit, calculate using ATR or percentage
-            if stop_loss is None or take_profit is None:
-                logger.warning("Could not find stop loss or take profit, calculating emergency levels")
-                try:
-                    if hasattr(self, 'data') and self.data is not None and len(self.data) > 0 and 'atr' in self.data.columns:
-                        atr_value = self.data['atr'].iloc[-1]
-                    else:
-                        # If no data or ATR available, use a percentage of entry price
-                        atr_value = entry_price * 0.0075  # Approximate 0.75% ATR
+            try:
+                # If we STILL don't have stop and take profit, calculate using fixed percentage
+                if stop_loss is None or take_profit is None:
+                    logger.warning("Could not find stop loss or take profit, calculating emergency levels")
                     
-                    logger.info(f"ATR value: {atr_value}, SL multiple: {self.stop_loss_atr_multiple}, TP multiple: {self.take_profit_atr_multiple}")
+                    # Use the active position to calculate emergency levels
+                    if active_positions and len(active_positions) > 0:
+                        position = active_positions[0]
+                        emergency_sl, emergency_tp = self.calculate_emergency_levels(position)
+                        
+                        if emergency_sl is not None:
+                            if stop_loss is None:
+                                stop_loss = emergency_sl
+                                logger.info(f"Using emergency stop loss: {stop_loss}")
+                        
+                        if emergency_tp is not None:
+                            if take_profit is None:
+                                take_profit = emergency_tp
+                                logger.info(f"Using emergency take profit: {take_profit}")
                     
-                    if position_side == 'long':
-                        if stop_loss is None:
-                            stop_loss = entry_price - (atr_value * self.stop_loss_atr_multiple)
-                            logger.info(f"Calculated emergency stop loss: {stop_loss}")
-                            
-                        if take_profit is None:
-                            take_profit = entry_price + (atr_value * self.take_profit_atr_multiple)
-                            logger.info(f"Calculated emergency take profit: {take_profit}")
-                            
-                    else:  # short
-                        if stop_loss is None:
-                            stop_loss = entry_price + (atr_value * self.stop_loss_atr_multiple)
-                            logger.info(f"Calculated emergency stop loss: {stop_loss}")
-                            
-                        if take_profit is None:
-                            take_profit = entry_price - (atr_value * self.take_profit_atr_multiple)
-                            logger.info(f"Calculated emergency take profit: {take_profit}")
-                except Exception as e:
-                    logger.error(f"Error calculating emergency stop levels: {e}")
-                    return False  # Cannot proceed without stop levels
+                    # If still no values, use last resort fallback
+                    if stop_loss is None or take_profit is None:
+                        logger.error("Could not calculate emergency levels, using last resort fallback")
+                        entry_price = float(position.get('entryPrice', current_price))
+                        
+                        if position_side == 'long':
+                            if stop_loss is None:
+                                stop_loss = entry_price * 0.99  # 1% below
+                            if take_profit is None:
+                                take_profit = entry_price * 1.005  # 1% above
+                        else:  # short
+                            if stop_loss is None:
+                                stop_loss = entry_price * 1.01  # 1% above
+                            if take_profit is None:
+                                take_profit = entry_price * 0.995  # 1% below
+                        
+                        logger.info(f"Last resort levels: SL={stop_loss}, TP={take_profit}")
+            except Exception as e:
+                logger.error(f"Error calculating emergency stop levels: {e}")
+                return False
                     
             # Check if price has moved beyond our stop or take profit levels (intervention needed)
             if position_side == 'long':
