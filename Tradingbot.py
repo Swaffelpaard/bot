@@ -45,7 +45,7 @@ def main():
     risk_params = {
         # Position sizing
         'risk_per_trade': 0.01,       # Risk 1% of account per trade
-        'leverage': 10,                # x leverage
+        'leverage': 2,                # x leverage
         
         # Stop-loss settings
         'use_signal_sl_tp': True,      # Use signal bot for SL/TP, False for ATR-based stops or fixed percentage as entered below
