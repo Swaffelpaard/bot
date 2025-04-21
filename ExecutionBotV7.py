@@ -3103,15 +3103,19 @@ class ExecutionBot:
             return False
  
     def start_trading_loop(self, interval=60, max_cycles=None):
-        """Start the trading loop and the position monitor"""
-        # Start the position monitor first
-        self.start_position_monitor()
+        """Start the trading loop with random delay to avoid API rate limits"""
         logger.info(f"Starting execution trading loop with {interval} second interval")
         
         cycle_count = 0
         
         try:
             while True:
+                # Add random delay between 0-5 seconds to prevent synchronized API calls
+                random_delay = random.uniform(0, 5)
+                if random_delay > 0:
+                    logger.debug(f"Adding random delay of {random_delay:.2f}s before cycle")
+                    time.sleep(random_delay)
+                
                 cycle_count += 1
                 logger.info(f"Starting trading cycle {cycle_count}")
                 
