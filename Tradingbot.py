@@ -45,7 +45,7 @@ def main():
     risk_params = {
         # Position sizing
         'risk_per_trade': 0.01,       # Risk 1% of account per trade
-        'leverage': 5,                # x leverage
+        'leverage': 10,                # x leverage
         
         # Stop-loss settings
         'use_signal_sl_tp': True,      # Use signal bot for SL/TP, False for ATR-based stops or fixed percentage as entered below
@@ -118,7 +118,7 @@ def main():
             "order_flow_weight": 0.6,        # Standard order flow weight
             "orderbook_pattern_weight": 0.5, # Standard orderbook pattern weight
             "trend_weight": 0.8,             # Standard trend weight
-            "quality_threshold": 0.5,        # Quality threshold (0-1)
+            "quality_threshold": 0.6,        # Quality threshold (0-1)
             "minimum_signal_score": 40.0,    # Minimum signal strength to consider
         })
         
