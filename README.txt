@@ -24,7 +24,10 @@ The bot can be configured through environment variables in the `.env` file:
 - `wallet`: Your Hyperliquid wallet address
 - `key`: Your Hyperliquid private key
 
+- To adjust settings like stop-loss and take-profit levels, orderbook or technical indicator weights, minimum signal sweep score or quality, go into SignalBotV7.py and change parameters in the initialise_regime_parameters function and in Tradingbot adjust the weights. 
+- To adjust trailing-stop settings, go into ExecutionBotV7.py and adjust numbers in the initialise_trailing_stop method. You can also turn of the use of trailing stop entirely in the Tradingbot.py by setten the use_trailing_stop to False
+
 ## Disclaimer
 
-This trading bot is provided for educational purposes only. Use at your own risk.
+This tradingbot in no way guarantees profit. You may lose all your money. Use at your own risk.
 Trading cryptocurrency involves substantial risk of loss and is not suitable for everyone.
