@@ -54,8 +54,8 @@ def main():
         'take_profit_atr_multiple': 1.5, # Take profit at x * ATR
         
         # Fixed percentage stops (backup if ATR not available)
-        'stop_loss_percent': 0.65,     # Stop loss at x % from entry
-        'take_profit_percent': 0.5,   # Take profit at x % from entry
+        'stop_loss_percent': 0.75,     # Stop loss at x % from entry
+        'take_profit_percent': 1.5,   # Take profit at x % from entry
         
         # NEW: Trailing stop configuration
         'use_trailing_stop': True,     # Toggle trailing stop mechanism
