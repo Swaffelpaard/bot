@@ -291,7 +291,7 @@ class SignalBot:
                 "min_signal_score": 50.0,
                 "cluster_proximity_max": 1.0,
                 "sl_factor": 0.75,
-                "tp_factor": 0.5,
+                "tp_factor": 1.5,
                 "trail_start": 0.3, 
                 "breakeven_point": 0.2,
                 "trail_step": 0.4,
@@ -305,7 +305,7 @@ class SignalBot:
                 "min_signal_score": 40.0,
                 "cluster_proximity_max": 1.5,
                 "sl_factor": 0.65,
-                "tp_factor": 0.5,
+                "tp_factor": 1.5,
                 "trail_start": 0.65, ### TURN OFF FOR TESTING SO 1.0
                 "breakeven_point": 0.2,
                 "imbalance_threshold": 3.0,
@@ -318,7 +318,7 @@ class SignalBot:
                 "min_signal_score": 50.0,
                 "cluster_proximity_max": 2.0,
                 "sl_factor": 0.65,
-                "tp_factor": 0.5,
+                "tp_factor": 1.5,
                 "trail_start": 0.4, ### TURN OFF FOR TESTING SO 1.0
                 "breakeven_point": 0.1,
                 "quality_threshold": 0.6,  # Increase quality threshold for high volatility
@@ -335,7 +335,7 @@ class SignalBot:
                 "min_signal_score": 40.0,  # Lower threshold to enter more easily during uptrend
                 "cluster_proximity_max": 2.0,
                 "sl_factor": 0.75,  # Wider stops in trending market
-                "tp_factor": 0.5,  # Larger targets in trending market
+                "tp_factor": 1.5,  # Larger targets in trending market
                 "trail_start": 0.4, ### TURN OFF FOR TESTING SO 1.0
                 "breakeven_point": 0.15,
                 "trend_weight": 0.5,  # Increase trend importance
@@ -348,7 +348,7 @@ class SignalBot:
                 "min_signal_score": 40.0,  # Lower threshold to enter more easily during downtrend
                 "cluster_proximity_max": 2.0,
                 "sl_factor": 0.75,  # Wider stops in trending market
-                "tp_factor": 0.5,  # Larger targets in trending market
+                "tp_factor": 1.5,  # Larger targets in trending market
                 "trail_start": 0.6, ### TURN OFF FOR TESTING SO 1.0
                 "breakeven_point": 0.15,
                 "trend_weight": 0.5,  # Increase trend importance
@@ -361,7 +361,7 @@ class SignalBot:
                 "min_signal_score": 40.0,  # Higher threshold for mean reversion signals
                 "cluster_proximity_max": 1.8,
                 "sl_factor": 0.4,  # Tighter stops in ranging market
-                "tp_factor": 0.5,   # Smaller targets in ranging market
+                "tp_factor": 1.25,   # Smaller targets in ranging market
                 "trail_start": 0.5, ### TURN OFF FOR TESTING SO 1.0
                 "breakeven_point": 0.15,
                 "mean_reversion_filter": True,  # Enable mean reversion filtering
@@ -374,7 +374,7 @@ class SignalBot:
                 "min_signal_score": 50.0,
                 "cluster_proximity_max": 2.0,
                 "sl_factor": 0.65,
-                "tp_factor": 0.5,
+                "tp_factor": 1.5,
                 "trail_start": 0.5, ### TURN OFF FOR TESTING SO 1.0
                 "breakeven_point": 0.2,
             }
