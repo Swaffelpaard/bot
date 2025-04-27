@@ -15,14 +15,14 @@ An automated cryptocurrency trading system built for Hyperliquid Exchange.
 1. Clone this repository
 2. Install dependencies: `pip install -r requirements.txt`
 3. Copy `.env.example` to `.env` and add your credentials
-4. Run the bot: `python ComboBotV6.py`
+4. Run the bot: `python Tradingbot.py`
 
 ## Configuration
 
 The bot can be configured through environment variables in the `.env` file:
 
-- `HYPERLIQUID_ADDRESS_LIVE_1`: Your Hyperliquid wallet address
-- `HYPERLIQUID_KEY_LIVE_1`: Your Hyperliquid private key
+- `wallet`: Your Hyperliquid wallet address
+- `key`: Your Hyperliquid private key
 
 ## Disclaimer
 
